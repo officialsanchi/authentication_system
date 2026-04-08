@@ -19,13 +19,13 @@ import java.util.UUID;
 @Component
 @Slf4j
 public class JwtTokenProvider {
-    @Value("${spring.jwt.access-token.secret}")
+    @Value("${jwt.access-token.secret}")
     private String accessTokenSecret;
 
-    @Value("${spring.jwt.refresh-token.secret}")
+    @Value("${jwt.refresh-token.secret}")
     private String refreshTokenSecret;
 
-    @Value("${spring.jwt.access-token.expiration-ms}")
+    @Value("${jwt.access-token.expiration-ms}")
     private long accessTokenExpirationMs;
 
     private SecretKey accessKey;
