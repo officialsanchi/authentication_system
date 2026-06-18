@@ -1,17 +1,16 @@
 package com.authentication.AuthenticationSystem.dtos.request;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 @Data
 public class LoginRequest {
-    @NotBlank(message = "Username is required")
-    private String username;
+    @JsonProperty("identifier") // Explicitly map the JSON key
+    @NotBlank(message = "Identifier is required")
+    private String identifier;
 
+    @JsonProperty("password")
     @NotBlank(message = "Password is required")
     private String password;
-    @NotBlank(message = "phoneNumber is required")
-    private String phoneNumber;
-    @NotBlank(message = "email is required")
-    private String email;
 }

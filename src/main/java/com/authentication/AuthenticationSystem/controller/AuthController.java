@@ -1,24 +1,23 @@
 package com.authentication.AuthenticationSystem.controller;
 
-import com.authentication.AuthenticationSystem.dtos.request.LoginRequest;
-import com.authentication.AuthenticationSystem.dtos.request.RefreshTokenRequest;
-import com.authentication.AuthenticationSystem.dtos.request.RegisterRequest;
-import com.authentication.AuthenticationSystem.dtos.request.VerifyEmailRequest;
-import com.authentication.AuthenticationSystem.dtos.response.JwtResponse;
-import com.authentication.AuthenticationSystem.dtos.response.MessageResponse;
-import com.authentication.AuthenticationSystem.dtos.response.UserResponse;
+import com.authentication.AuthenticationSystem.dtos.request.*;
+
+import com.authentication.AuthenticationSystem.dtos.response.AuthResponse;
+
 import com.authentication.AuthenticationSystem.model.User;
-import com.authentication.AuthenticationSystem.repository.UserRepository;
-import com.authentication.AuthenticationSystem.security.UserDetailsImpl;
 import com.authentication.AuthenticationSystem.service.AuthService;
-import com.authentication.AuthenticationSystem.service.PasswordResetService;
-import jakarta.servlet.http.HttpServletRequest;
+import com.authentication.AuthenticationSystem.service.FileStorageService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.security.Principal;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/v1/auth")
@@ -26,68 +25,99 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
-    private final UserRepository userRepository;
-    private final PasswordResetService passwordResetService;
-
-    @PostMapping("/login")
-    public ResponseEntity<JwtResponse> authenticateUser(
-            @Valid @RequestBody LoginRequest loginRequest,
-            HttpServletRequest request) {
-        return ResponseEntity.ok(authService.authenticateUser(loginRequest, request));
-    }
+    private final  FileStorageService fileStorageService;
 
     @PostMapping("/register")
-    public ResponseEntity<MessageResponse> registerUser(
-            @Valid @RequestBody RegisterRequest registerRequest,
-            HttpServletRequest request) {
-        return ResponseEntity.ok(authService.registerUser(registerRequest, request));
+    public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest req) {
+        try {
+            authService.registerUser(req);
+            return ResponseEntity.ok(AuthResponse.of("Registration successful. Check email for OTP.", true));
+        } catch (RuntimeException e) {
+            // Return the actual error message (e.g., "User already exists") with a 400 status
+            return ResponseEntity.badRequest().body(AuthResponse.of(e.getMessage(), false));
+        }
+    }
+    @PostMapping("/login")
+    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest req) {
+        try {
+            AuthResponse response = authService.login(req.getIdentifier(), req.getPassword());
+            return ResponseEntity.ok(response);
+        } catch (RuntimeException e) {
+
+            return ResponseEntity.status(400).body(
+                    AuthResponse.builder()
+                            .message(e.getMessage())
+                            .success(false)
+                            .build()
+            );
+        }
+    }
+    @PostMapping("/verify-otp")
+    public ResponseEntity<AuthResponse> verifyOtp(@Valid @RequestBody VerifyOtpRequest req) {
+        AuthResponse response = authService.verifyOtp(req);
+        return ResponseEntity.ok(response);
     }
 
-    @PostMapping("/refresh")
-    public ResponseEntity<JwtResponse> refreshToken(
-            @Valid @RequestBody RefreshTokenRequest refreshTokenRequest,
-            HttpServletRequest request) {
-        return ResponseEntity.ok(authService.refreshToken(refreshTokenRequest.getRefreshToken(), request));
+    @PostMapping("/reset-password")
+    public ResponseEntity<AuthResponse> resetPassword(@Valid @RequestBody PasswordResetRequest request) {
+        AuthResponse response = authService.resetPassword(request);
+        return ResponseEntity.ok(response);
     }
 
-    @PostMapping("/logout")
-    public ResponseEntity<MessageResponse> logout(
-            @RequestHeader(value = "Authorization", required = false) String authHeader,
-            @RequestBody(required = false) RefreshTokenRequest refreshTokenRequest,
-            HttpServletRequest request) {
 
-        String accessToken = null;
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            accessToken = authHeader.substring(7);
+    @PostMapping("/upload-photo")
+    public ResponseEntity<AuthResponse> uploadPhoto(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @RequestParam("file") MultipartFile file) {
+
+        // Basic validation: Check if file is an image
+        if (file.getContentType() == null || !file.getContentType().startsWith("image/")) {
+            return ResponseEntity.badRequest().body(AuthResponse.of("Only image files are allowed", false));
         }
 
-        String refreshToken = refreshTokenRequest != null ? refreshTokenRequest.getRefreshToken() : null;
-
-        return ResponseEntity.ok(authService.logout(accessToken, refreshToken, request));
+        AuthResponse response = authService.updateProfilePhoto(userDetails.getUsername(), file);
+        return ResponseEntity.ok(response);
+    }
+    @PutMapping("/me")
+    public ResponseEntity<?> updateProfile(Principal principal, @RequestBody UpdateRequest request) {
+        User updated = authService.updateProfile(principal.getName(), request);
+        return ResponseEntity.ok(Map.of("message", "Profile updated successfully", "user", updated));
     }
 
-    @PostMapping("/verify-email")
-    public ResponseEntity<MessageResponse> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
-        // Implementation in EmailVerificationService
-        return ResponseEntity.ok(MessageResponse.success("Email verified successfully"));
+
+    @PostMapping("/me/password")
+    public ResponseEntity<?> changePassword(Principal principal, @RequestBody PasswordChangeRequest request) {
+        authService.updatePassword(principal.getName(), request);
+        return ResponseEntity.ok(Map.of("message", "Password changed successfully"));
     }
 
-    @GetMapping("/me")
-    @PreAuthorize("hasRole('USER')")
-    public ResponseEntity<UserResponse> getCurrentUser(Authentication authentication) {
-        UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
-        User user = userRepository.findById(userDetails.getId()).orElseThrow();
 
-        return ResponseEntity.ok(UserResponse.builder()
-                .id(user.getId())
-                .username(user.getUsername())
-                .email(user.getEmail())
-                .roles(user.getRoles().stream().map(Enum::name).collect(java.util.stream.Collectors.toSet()))
-                .emailVerified(user.isEmailVerified())
-                .enabled(user.isEnabled())
-                .accountNonLocked(user.isAccountNonLocked())
-                .createdAt(user.getCreatedAt())
-                .lastLoginAt(user.getLastLoginAt())
-                .build());
+    @PostMapping("/me/photo")
+    public ResponseEntity<?> uploadPhoto(Principal principal, @RequestParam("file") MultipartFile file) {
+        try {
+
+            if (file.getContentType() == null || !file.getContentType().startsWith("image/")) {
+                return ResponseEntity.badRequest().body(Map.of("message", "Only image files are allowed"));
+            }
+
+            User user = authService.getUserByEmail(principal.getName());
+
+            String photoUrl = fileStorageService.saveProfilePhoto(file, user);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "Photo uploaded successfully",
+                    "photoUrl", photoUrl
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Upload failed: " + e.getMessage()));
+        }
     }
+
+    @DeleteMapping("/me")
+    public ResponseEntity<?> deleteAccount(Principal principal) {
+        authService.deleteUser(principal.getName());
+        return ResponseEntity.ok(Map.of("message", "Account deleted successfully"));
+    }
+
+
 }

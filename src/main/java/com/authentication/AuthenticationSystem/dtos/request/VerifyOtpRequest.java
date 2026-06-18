@@ -5,8 +5,9 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 @Data
-public class PasswordResetRequest {
+public class VerifyOtpRequest {
+    @Email
     @NotBlank String email;
-    @NotBlank String otp;
-    @NotBlank String newPassword;
+    @NotBlank
+    String otp;
 }

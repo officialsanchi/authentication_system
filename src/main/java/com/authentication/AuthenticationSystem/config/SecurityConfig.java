@@ -1,22 +1,21 @@
 package com.authentication.AuthenticationSystem.config;
 
-import com.authentication.AuthenticationSystem.security.JwtAuthenticationEntryPoint;
-import com.authentication.AuthenticationSystem.security.JwtAuthenticationFilter;
+import com.authentication.AuthenticationSystem.security.JwtFilter;
+import com.authentication.AuthenticationSystem.service.CustomUserDetailsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+
 import org.springframework.http.HttpMethod;
-import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
-import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
+import org.springframework.security.config.http.SessionCreationPolicy;;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -29,47 +28,57 @@ import java.util.List;
 
 @Configuration
 @EnableWebSecurity
-@EnableMethodSecurity(prePostEnabled = true, securedEnabled = true)
+@EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
-    private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
-    private final JwtAuthenticationFilter jwtAuthenticationFilter;
-    private final UserDetailsService userDetailsService;
 
+    private final JwtFilter jwtFilter;
+    private final CustomUserDetailsService userDetailsService;
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http
+        return http
+                // 1. Disable CSRF (Stateless APIs don't need it)
                 .csrf(AbstractHttpConfigurer::disable)
+
+                // 2. Enable CORS with our custom bean below
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                .exceptionHandling(exception ->
-                        exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authenticationProvider(authenticationProvider())
+
+                // 3. Set session to Stateless (JWT based)
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                // 4. Set Request Permissions
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints
-                        .requestMatchers("/v1/auth/**").permitAll()
-                        .requestMatchers("/v1/password/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/v1/public/**").permitAll()
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // Allow browser pre-flight
+                        .requestMatchers("/v1/auth/**", "/uploads/**").permitAll() // Allow public routes
+                        .anyRequest().authenticated() // Protect everything else
+                )
 
-                        // Admin endpoints
-                        .requestMatchers("/v1/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+                // 5. Wire up the Authentication Provider
+                .authenticationProvider(authenticationProvider())
 
-                        // User endpoints
-                        .requestMatchers("/v1/user/**").hasAnyRole("USER", "ADMIN", "MODERATOR")
-                        .requestMatchers("/v1/profile/**").hasAnyRole("USER", "ADMIN", "MODERATOR")
+                // 6. Add our JWT Filter before the standard UsernamePassword filter
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
 
-                        // Moderator endpoints
-                        .requestMatchers("/v1/moderator/**").hasAnyRole("MODERATOR", "ADMIN")
-                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
-                        // All other requests need authentication
-                        .anyRequest().authenticated()
-                );
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
 
-        http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+        // ADD BOTH PORTS TO BE SAFE (3000 for standard React, 5173 for Vite)
+        config.setAllowedOrigins(Arrays.asList(
+                "http://localhost:3000",
+                "http://localhost:5173"
+        ));
 
-        return http.build();
+        config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "X-Requested-With"));
+        config.setAllowCredentials(true);
+        config.setExposedHeaders(List.of("Authorization"));
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 
     @Bean
@@ -81,35 +90,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
-        return config.getAuthenticationManager();
-    }
-
-    @Bean
     public PasswordEncoder passwordEncoder() {
-        return Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
+        return new BCryptPasswordEncoder();
     }
 
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("http://localhost:3000", "https://yourdomain.com"));
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList(
-                "Authorization",
-                "Content-Type",
-                "X-Requested-With",
-                "Accept",
-                "Origin",
-                "Access-Control-Request-Method",
-                "Access-Control-Request-Headers"
-        ));
-        configuration.setExposedHeaders(List.of("Authorization", "X-Refresh-Token"));
-        configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L);
 
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", configuration);
-        return source; // ✅ no cast
-    }
 }

@@ -12,30 +12,8 @@ import java.util.Optional;
 import java.util.UUID;
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
-    Optional<User> findByUsername(String username);
+    @Query("SELECT u FROM User u WHERE u.username = :login OR u.email = :login OR u.phoneNumber = :login")
+    Optional<User> findByAnyIdentifier(@Param("login") String login);
 
     Optional<User> findByEmail(String email);
-
-    boolean existsByUsername(String username);
-
-    boolean existsByEmail(String email);
-    Optional<User> findByPhoneNumber(String phoneNumber);
-    boolean existsByPhoneNumber(String phoneNumber);
-
-
-    @Modifying
-    @Query("UPDATE User u SET u.lastLoginAt = :time, u.lastLoginIp = :ip WHERE u.id = :id")
-    void updateLastLogin(@Param("id") Long id, @Param("time") LocalDateTime time, @Param("ip") String ip);
-
-    @Modifying
-    @Query("UPDATE User u SET u.accountNonLocked = :locked, u.lockedUntil = :until WHERE u.id = :id")
-    void updateLockStatus(@Param("id") Long id, @Param("locked") boolean locked, @Param("until") LocalDateTime until);
-
-    @Modifying
-    @Query("UPDATE User u SET u.emailVerified = true WHERE u.id = :id")
-    void verifyEmail(@Param("id") Long id);
-
-    @Modifying
-    @Query("UPDATE User u SET u.password = :password WHERE u.id = :id")
-    void updatePassword(@Param("id") Long id, @Param("password") String password);
 }
