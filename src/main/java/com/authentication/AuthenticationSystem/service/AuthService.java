@@ -6,6 +6,7 @@ import com.authentication.AuthenticationSystem.dtos.response.AuthResponse;
 import com.authentication.AuthenticationSystem.model.User;
 import com.authentication.AuthenticationSystem.repository.UserRepository;
 import com.authentication.AuthenticationSystem.security.JwtUtils;
+import com.cloudinary.Cloudinary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,34 +27,67 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final OtpService otpService;
-    private final FileStorageService fileStorageService;
+    private final CloudinaryService cloudinaryService;
     private final JwtUtils jwtUtils;
 
     @Transactional
     public void registerUser(RegisterRequest request) {
-        if (userRepository.findByAnyIdentifier(request.getEmail()).isPresent()) {
-            throw new RuntimeException("User already exists");
+        String normalizedEmail = request.getEmail().trim().toLowerCase();
+        String normalizedUsername = request.getUsername().trim();
+
+        if (userRepository.findByAnyIdentifier(normalizedEmail).isPresent() ||
+                userRepository.findByAnyIdentifier(normalizedUsername).isPresent()) {
+            throw new RuntimeException("User already exists with this email or username");
         }
 
         User user = User.builder()
-                .username(request.getUsername())
-                .email(request.getEmail())
-                .phoneNumber(request.getPhoneNumber())
-                .password(passwordEncoder.encode(request.getPassword()))
+                .fullName(request.getFullName().trim())
+                .username(normalizedUsername)
+                .email(normalizedEmail)
+                .phoneNumber(request.getPhoneNumber() != null ? request.getPhoneNumber().trim() : null)
+                .password(passwordEncoder.encode(request.getPassword().trim()))
                 .enabled(false)
                 .build();
 
         userRepository.save(user);
 
-        // DRY CALL
         otpService.generateAndSendOtp(user, "Verify Your Registration");
     }
 
-    public AuthResponse login(String identifier, String password) {
-        User user = userRepository.findByAnyIdentifier(identifier)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+    @Transactional
+    public void forgotPassword(String email) {
+        String normalizedEmail = email.trim().toLowerCase();
 
-        if (!passwordEncoder.matches(password, user.getPassword())) {
+        User user = userRepository.findByEmail(normalizedEmail)
+                .orElseThrow(() -> new RuntimeException("No account found with this email"));
+
+        otpService.generateAndSendOtp(
+                user,
+                "Password Reset Verification"
+        );
+    }
+    public AuthResponse login(String identifier, String rawPassword) {
+        String normalizedIdentifier = identifier.trim().toLowerCase();
+        String cleanPassword = rawPassword.trim();
+
+        System.out.println("=================== LOGIN DEBUG ===================");
+        System.out.println("Identifier received: [" + normalizedIdentifier + "]");
+
+        User user = userRepository.findByAnyIdentifier(normalizedIdentifier)
+                .orElseThrow(() -> {
+                    System.out.println("DEBUG RESULT: USER NOT FOUND IN DATABASE!");
+                    return new RuntimeException("Invalid credentials");
+                });
+
+        System.out.println("User found: Email=" + user.getEmail() + " | Username=" + user.getUsername());
+        System.out.println("Stored Encoded Password: " + user.getPassword());
+
+        boolean matches = passwordEncoder.matches(cleanPassword, user.getPassword());
+        System.out.println("BCrypt Matches?: " + matches);
+        System.out.println("User Enabled Status: " + user.isEnabled());
+        System.out.println("===================================================");
+
+        if (!matches) {
             throw new RuntimeException("Invalid credentials");
         }
 
@@ -61,7 +95,7 @@ public class AuthService {
             throw new RuntimeException("Please verify your account via OTP first");
         }
 
-        String token = jwtUtils.generateToken(user.getUsername());
+        String token = jwtUtils.generateToken(user.getEmail());
 
         return AuthResponse.builder()
                 .message("Login successful")
@@ -73,95 +107,107 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResponse verifyOtp(VerifyOtpRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
+    public AuthResponse verifyResetOtp(VerifyOtpRequest request) {
+        String email = request.getEmail().trim().toLowerCase();
+        String otp = request.getOtp().trim();
+
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        if (!otpService.isOtpValid(user, request.getOtp())) {
+        if (!otpService.isOtpValid(user, otp)) {
             throw new RuntimeException("Invalid or expired OTP");
         }
 
-        user.setEnabled(true);
-        otpService.clearOtp(user); // Clean up DB
+        // Auto-enable user if verifying registration or reset
+        if (!user.isEnabled()) {
+            user.setEnabled(true);
+            userRepository.save(user);
+        }
 
-        return AuthResponse.of("Account verified!", true);
+        return AuthResponse.of(
+                "OTP verified successfully.",
+                true
+        );
     }
 
-
-
-    public AuthResponse updateProfilePhoto(String username, MultipartFile file) {
-        User user = userRepository.findByAnyIdentifier(username)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        // 1. Save file to disk
-        String filename = fileStorageService.saveProfilePhoto(file, user);
-
-        // 2. Update database with the path/URL
-        user.setProfilePhotoUrl("/uploads/profile-photos/" + filename);
-        userRepository.save(user);
-
-        return AuthResponse.of("Profile photo updated successfully", true);
-    }
     @Transactional
     public AuthResponse resetPassword(PasswordResetRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
+        String email = request.getEmail().trim().toLowerCase();
+        String otp = request.getOtp().trim();
+        String rawNewPassword = request.getNewPassword().trim(); // Clean raw password
+
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // 1. Validate
-        if (user.getOtpCode() == null || !user.getOtpCode().equals(request.getOtp())) {
+        if (user.getOtpCode() == null || !user.getOtpCode().equals(otp)) {
             throw new RuntimeException("Invalid OTP");
         }
 
-        if (user.getOtpExpiry().isBefore(LocalDateTime.now())) {
+        if (user.getOtpExpiry() == null || user.getOtpExpiry().isBefore(LocalDateTime.now())) {
             throw new RuntimeException("OTP expired");
         }
 
-        // 2. Change Password
-        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        // 1. Encode raw password using BCrypt
+        String encodedPassword = passwordEncoder.encode(rawNewPassword);
 
-        // TIGHTEN LOGIC: Wipe the code immediately
+        System.out.println("=== RESET PASSWORD DEBUG ===");
+        System.out.println("Raw new password: [" + rawNewPassword + "]");
+        System.out.println("Generated Hash: [" + encodedPassword + "]");
+        System.out.println("============================");
+
+        user.setPassword(encodedPassword);
+        user.setEnabled(true);
+
+        // Clear OTP
         user.setOtpCode(null);
         user.setOtpExpiry(null);
 
         userRepository.save(user);
+
         return AuthResponse.of("Password reset successful!", true);
     }
+
+    @Transactional
+    public String updateProfilePhoto(MultipartFile file, String email) {
+        String normalizedEmail = email.trim().toLowerCase();
+
+        User user = userRepository.findByEmail(normalizedEmail)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        String imageUrl = cloudinaryService.uploadProfilePhoto(file);
+        user.setProfilePhotoUrl(imageUrl);
+        userRepository.save(user);
+
+        return imageUrl;
+    }
+
     public User getUserByEmail(String email) {
-        return userRepository.findByEmail(email)
+        String normalizedEmail = email.trim().toLowerCase();
+        return userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
     }
 
-    private String generateOTP() {
-        // SecureRandom is better for real-life security than Random
-        return String.format("%06d", new SecureRandom().nextInt(999999));
-    }
-    public User updateProfile(String email, UpdateRequest request) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        user.setUsername(request.getUsername());
-        user.setPhoneNumber(request.getPhoneNumber());
-        return userRepository.save(user);
-    }
-
+    @Transactional
     public void updatePassword(String email, PasswordChangeRequest request) {
-        User user = userRepository.findByEmail(email)
+        String normalizedEmail = email.trim().toLowerCase();
+
+        User user = userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // Verify old password
-        if (!passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
+        if (!passwordEncoder.matches(request.getOldPassword().trim(), user.getPassword())) {
             throw new RuntimeException("Current password does not match");
         }
 
-        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setPassword(passwordEncoder.encode(request.getNewPassword().trim()));
         userRepository.save(user);
     }
 
+    @Transactional
     public void deleteUser(String email) {
-        User user = userRepository.findByEmail(email)
+        String normalizedEmail = email.trim().toLowerCase();
+        User user = userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new RuntimeException("User not found"));
         userRepository.delete(user);
     }
-
 
 }

@@ -27,4 +27,8 @@ public class RegisterRequest {
     @Size(min = 8, message = "Password must be at least 8 characters")
     @JsonProperty("password")
     private String password;
+    @NotBlank(message = "Full_name is required")
+    @JsonProperty("Full_name") // This forces Jackson to read the capital 'F' and underscore
+    private String fullName;
+
 }

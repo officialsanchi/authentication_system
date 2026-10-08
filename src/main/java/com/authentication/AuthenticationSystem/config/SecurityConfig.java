@@ -34,29 +34,19 @@ public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
     private final CustomUserDetailsService userDetailsService;
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
-                // 1. Disable CSRF (Stateless APIs don't need it)
                 .csrf(AbstractHttpConfigurer::disable)
-
-                // 2. Enable CORS with our custom bean below
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-
-                // 3. Set session to Stateless (JWT based)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-
-                // 4. Set Request Permissions
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll() // Allow browser pre-flight
-                        .requestMatchers("/v1/auth/**", "/uploads/**").permitAll() // Allow public routes
-                        .anyRequest().authenticated() // Protect everything else
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/v1/auth/**", "/error", "/uploads/**").permitAll() // Added /error
+                        .anyRequest().authenticated()
                 )
-
-                // 5. Wire up the Authentication Provider
                 .authenticationProvider(authenticationProvider())
-
-                // 6. Add our JWT Filter before the standard UsernamePassword filter
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
     }
@@ -65,10 +55,9 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
 
-        // ADD BOTH PORTS TO BE SAFE (3000 for standard React, 5173 for Vite)
         config.setAllowedOrigins(Arrays.asList(
-                "http://localhost:3000",
-                "http://localhost:5173"
+                "http://localhost:3000"
+
         ));
 
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
@@ -93,6 +82,5 @@ public class SecurityConfig {
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
-
 
 }

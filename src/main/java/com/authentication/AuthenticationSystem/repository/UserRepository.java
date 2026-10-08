@@ -12,8 +12,16 @@ import java.util.Optional;
 import java.util.UUID;
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
-    @Query("SELECT u FROM User u WHERE u.username = :login OR u.email = :login OR u.phoneNumber = :login")
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE LOWER(u.username) = LOWER(:login)
+               OR LOWER(u.email) = LOWER(:login)
+               OR LOWER(u.phoneNumber) = LOWER(:login)
+            """)
     Optional<User> findByAnyIdentifier(@Param("login") String login);
 
     Optional<User> findByEmail(String email);
+
+    Optional<User> findByUsername(String username);
 }
